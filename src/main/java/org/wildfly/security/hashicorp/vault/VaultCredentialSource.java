@@ -183,7 +183,7 @@ public class VaultCredentialSource implements CredentialSource {
                     return null;
                 }
 
-                String password = VaultKeyPathOperations.resolveKeyPath(secretData, alias.getKeyPath());
+                String password = VaultKeyPathOperations.resolveKeyPathSegments(secretData, alias.getKeyPathSegments());
                 if (password == null) {
                     ROOT_LOGGER.tracef("VaultCredentialSource credential not found: alias=%s, reason=%s", alias.toString(), "key not found in secret data");
                     return null;

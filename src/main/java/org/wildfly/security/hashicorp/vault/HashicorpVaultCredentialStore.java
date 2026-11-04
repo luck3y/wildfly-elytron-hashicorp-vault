@@ -295,7 +295,7 @@ public class HashicorpVaultCredentialStore extends CredentialStoreSpi {
             }
 
             // Resolve the specific value using key path
-            String value = VaultKeyPathOperations.resolveKeyPath(secretData, alias.getKeyPath());
+            String value = VaultKeyPathOperations.resolveKeyPathSegments(secretData, alias.getKeyPathSegments());
             if (value == null) {
                 ROOT_LOGGER.tracef("Credential not found: alias=%s, reason=%s", credentialAlias, "key not found in secret");
                 return null;
@@ -614,7 +614,7 @@ public class HashicorpVaultCredentialStore extends CredentialStoreSpi {
             if (keys != null && !keys.isEmpty()) {
                 for (String key : keys) {
                     if (aliases.size() >= maxNumberOfAliases) return;
-                    aliases.add("#" + secretPath + "?" + key);
+                    aliases.add(VaultPath.toAlias(secretPath, key));
                 }
             }
         } catch (CredentialStoreException e) {
@@ -637,7 +637,7 @@ public class HashicorpVaultCredentialStore extends CredentialStoreSpi {
                             // Subdirectory - recurse into it
                             String subdirName = item.substring(0, item.length() - 1);
                             String fullPath = secretPath.isEmpty() ? subdirName : secretPath + "/" + subdirName;
-                            collectAliasesRecursive("@" + mountPath + "#" + fullPath, aliases, recursive, maxDepth, currentDepth + 1, maxNumberOfAliases);
+                            collectAliasesRecursive("@" + VaultPath.encodePath(mountPath) + "#" + VaultPath.encodePath(fullPath), aliases, recursive, maxDepth, currentDepth + 1, maxNumberOfAliases);
                         } else {
                             // Secret - get its keys
                             String fullPath = secretPath.isEmpty() ? item : secretPath + "/" + item;
@@ -647,7 +647,7 @@ public class HashicorpVaultCredentialStore extends CredentialStoreSpi {
                                 if (keys != null) {
                                     for (String key : keys) {
                                         if (aliases.size() >= maxNumberOfAliases) return;
-                                        aliases.add("#" + fullPath + "?" + key);
+                                        aliases.add(VaultPath.toAlias(fullPath, key));
                                     }
                                 }
                             } catch (CredentialStoreException e) {

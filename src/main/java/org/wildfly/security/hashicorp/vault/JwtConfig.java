@@ -5,7 +5,6 @@
 package org.wildfly.security.hashicorp.vault;
 
 import static org.wildfly.common.Assert.checkNotNullParam;
-import static org.wildfly.security.hashicorp.vault._private.HashiCorpVaultLogger.ROOT_LOGGER;
 import org.wildfly.common.annotation.NotNull;
 
 /**

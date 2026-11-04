@@ -7,6 +7,9 @@ package org.wildfly.security.hashicorp.vault;
 import static org.wildfly.common.Assert.checkNotNullParam;
 import static org.wildfly.security.hashicorp.vault._private.HashiCorpVaultLogger.ROOT_LOGGER;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 
 import org.wildfly.security.credential.store.CredentialStoreException;
@@ -37,9 +40,11 @@ import org.wildfly.security.credential.store.CredentialStoreException;
 class VaultAlias extends VaultPath {
 
     private final String keyPath;
+    private final List<String> keyPathSegments;
 
     /**
-     * Package-private constructor - use factory methods or VaultPath.parse() to create instances.
+     * Use factory methods or VaultPath.parse() to create instances.
+     * Every {@code /} in the key path is treated as a nesting separator.
      *
      * @param engineType the engine type (KVv1 or KVv2)
      * @param mountPath the mount path
@@ -47,8 +52,22 @@ class VaultAlias extends VaultPath {
      * @param keyPath the key path
      */
     VaultAlias(String engineType, String mountPath, String secretPath, String keyPath) {
+        this(engineType, mountPath, secretPath, Arrays.asList(keyPath.split("/")));
+    }
+
+    /**
+     * Package-private constructor taking already-decoded key path segments. A segment may
+     * itself contain a literal {@code /} (from a percent-encoded {@code %2F} in the alias).
+     *
+     * @param engineType the engine type (KVv1 or KVv2)
+     * @param mountPath the mount path
+     * @param secretPath the secret path
+     * @param keyPathSegments the decoded key path segments
+     */
+    VaultAlias(String engineType, String mountPath, String secretPath, List<String> keyPathSegments) {
         super(engineType, mountPath, secretPath);
-        this.keyPath = keyPath;
+        this.keyPathSegments = Collections.unmodifiableList(keyPathSegments);
+        this.keyPath = String.join("/", keyPathSegments);
     }
 
     /**
@@ -144,12 +163,25 @@ class VaultAlias extends VaultPath {
     }
 
     /**
-     * Get the key path (e.g., "password", "database/credentials/password").
+     * Get the decoded key path segments joined with {@code /} (e.g., "password",
+     * "database/credentials/password"). This form is for display and logging only: a segment
+     * that contained an encoded slash ({@code %2F}) is indistinguishable from a nesting
+     * separator here. Use {@link #getKeyPathSegments()} to look up values.
      *
      * @return the key path
      */
     public String getKeyPath() {
         return keyPath;
+    }
+
+    /**
+     * Get the decoded key path segments. Each segment is a single map key; a segment
+     * may contain a literal {@code /} when the alias used {@code %2F}.
+     *
+     * @return an unmodifiable list of key path segments
+     */
+    public List<String> getKeyPathSegments() {
+        return keyPathSegments;
     }
 
     /**
@@ -167,12 +199,12 @@ class VaultAlias extends VaultPath {
         if (o == null || getClass() != o.getClass()) return false;
         if (!super.equals(o)) return false;
         VaultAlias that = (VaultAlias) o;
-        return Objects.equals(keyPath, that.keyPath);
+        return Objects.equals(keyPathSegments, that.keyPathSegments);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), keyPath);
+        return Objects.hash(super.hashCode(), keyPathSegments);
     }
 
     /**
