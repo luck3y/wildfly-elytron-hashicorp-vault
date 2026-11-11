@@ -7,6 +7,9 @@ package org.wildfly.security.hashicorp.vault;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.wildfly.security.credential.store.CredentialStoreException;
@@ -469,6 +472,97 @@ public class VaultAliasParsingTestCase {
                 "myapp", "KVv2", "secret", true));
 
         assertNotNull(ex.getMessage());
+    }
+
+    /**
+     * The legacy format splits on the last dot, wherever it is. These aliases parsed this way in 1.1.0.CR3 and
+     * existing configurations may depend on it, so the split must not change even where the result looks odd:
+     * the text after the last dot becomes the key path, and a {@code /} in it is nested traversal.
+     */
+    @Test
+    void testLegacyDotBeforeLastSlashSplitsOnLastDotLikeCr3() throws CredentialStoreException {
+        VaultAlias alias = VaultAlias.parse("my.app/config", "KVv2", "secret", true);
+
+        assertEquals("secret", alias.getMountPath());
+        assertEquals("my", alias.getSecretPath());
+        assertEquals("app/config", alias.getKeyPath());
+        assertEquals(List.of("app", "config"), alias.getKeyPathSegments());
+    }
+
+    @Test
+    void testLegacyLastDotSplitWithSeveralSlashesLikeCr3() throws CredentialStoreException {
+        VaultAlias deep = VaultAlias.parse("a.b/c/d", "KVv2", "secret", true);
+        assertEquals("a", deep.getSecretPath());
+        assertEquals(List.of("b", "c", "d"), deep.getKeyPathSegments());
+
+        // the last dot is the one that counts, so an earlier dot stays in the secret path
+        VaultAlias twoDots = VaultAlias.parse("x.y/z.w/v", "KVv2", "secret", true);
+        assertEquals("x.y/z", twoDots.getSecretPath());
+        assertEquals(List.of("w", "v"), twoDots.getKeyPathSegments());
+    }
+
+    @Test
+    void testLegacyDotBeforeLastSlashStillRejectedWhenLegacyDisabled() {
+        // With legacy support off the alias is rejected as legacy, as in CR3, and not reported as something else
+        CredentialStoreException ex = assertThrows(CredentialStoreException.class,
+            () -> VaultAlias.parse("my.app/config", "KVv2", "secret", false));
+        assertTrue(ex.getMessage().contains("my?app/config"), "was: " + ex.getMessage());
+    }
+
+    @Test
+    void testLegacyDotInSecretPathWithKey() throws CredentialStoreException {
+        VaultAlias alias = VaultAlias.parse(
+            "my.app/config.password", "KVv2", "secret", true);
+
+        assertEquals("secret", alias.getMountPath());
+        assertEquals("my.app/config", alias.getSecretPath());
+        assertEquals("password", alias.getKeyPath());
+    }
+
+    /**
+     * Legacy aliases are URL-decoded, as they were in 1.1.0.CR3, and existing configurations may depend on it.
+     * The legacy key is decoded as a whole and then split on {@code /}, so an encoded {@code %2F} in a legacy key
+     * is nested traversal. That differs from the new format, where {@code %2F} is a literal slash in the key name.
+     */
+    @Test
+    void testLegacyFormatIsUrlDecodedLikeCr3() throws CredentialStoreException {
+        VaultAlias alias = VaultAlias.parse(
+            "a+b/c%20d.pass%2Fword", "KVv2", "secret", true);
+
+        assertEquals("a b/c d", alias.getSecretPath());
+        assertEquals("pass/word", alias.getKeyPath());
+        assertEquals(List.of("pass", "word"), alias.getKeyPathSegments());
+    }
+
+    @Test
+    void testLegacyPlusAndEncodedSpaceDecodeLikeCr3() throws CredentialStoreException {
+        assertEquals("a b", VaultAlias.parse("a+b.key", "KVv2", "secret", true).getSecretPath());
+        assertEquals("x y", VaultAlias.parse("x%20y.k", "KVv2", "secret", true).getSecretPath());
+    }
+
+    @Test
+    void testLegacyKeyWithTrailingEncodedSlashStillRejectedLikeCr3() {
+        // decoded to "b/", which has an empty segment
+        assertThrows(CredentialStoreException.class,
+            () -> VaultAlias.parse("a.b%2F", "KVv2", "secret", true));
+    }
+
+    @Test
+    void testNewFormatEncodedSlashStaysLiteralWhileLegacyDoesNot() throws CredentialStoreException {
+        VaultAlias newFormat = VaultAlias.parse("#a?k%2Fz", "KVv2", "secret", true);
+        VaultAlias legacy = VaultAlias.parse("a.k%2Fz", "KVv2", "secret", true);
+
+        assertEquals(List.of("k/z"), newFormat.getKeyPathSegments());
+        assertEquals(List.of("k", "z"), legacy.getKeyPathSegments());
+    }
+
+    @Test
+    void testNewFormatIsStillUrlDecodedWithLegacySupport() throws CredentialStoreException {
+        VaultAlias alias = VaultAlias.parse(
+            "#a+b?pass%2Fword", "KVv2", "secret", true);
+
+        assertEquals("a b", alias.getSecretPath());
+        assertEquals("pass/word", alias.getKeyPath());
     }
 
     @Test

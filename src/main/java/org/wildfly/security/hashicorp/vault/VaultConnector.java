@@ -9,6 +9,7 @@ import static org.wildfly.security.hashicorp.vault._private.HashiCorpVaultLogger
 import java.net.http.HttpClient;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -26,6 +27,9 @@ import io.github.jopenlibs.vault.SslConfig;
 import io.github.jopenlibs.vault.Vault;
 import io.github.jopenlibs.vault.VaultConfig;
 import io.github.jopenlibs.vault.VaultException;
+import io.github.jopenlibs.vault.json.Json;
+import io.github.jopenlibs.vault.json.JsonObject;
+import io.github.jopenlibs.vault.json.JsonValue;
 import io.github.jopenlibs.vault.response.LogicalResponse;
 
 /**
@@ -287,7 +291,7 @@ public class VaultConnector {
      * @param path the vault path
      * @return the full path for Vault API calls
      */
-    private String constructVaultPath(VaultPath path) {
+    String constructVaultPath(VaultPath path) {
         String mountPath = path.getMountPath();
         String secretPath = path.getSecretPath();
 
@@ -361,11 +365,14 @@ public class VaultConnector {
         try {
             // For KV v2, the Vault library automatically adds /metadata/ when listing
             // So we just pass mount + secret path, and it constructs the full path
+            // The Vault library does not encode path components, so encode each segment here, as
+            // constructVaultPath does for reads and writes. Otherwise a name such as "100%dir" or "a b"
+            // produces a malformed request URL.
             String listPath;
             if (secretPath == null || secretPath.isEmpty()) {
-                listPath = mountPath;
+                listPath = urlEncodePath(mountPath);
             } else {
-                listPath = mountPath + "/" + secretPath;
+                listPath = urlEncodePath(mountPath) + "/" + urlEncodePath(secretPath);
             }
 
             // Get or create a cached Vault instance for listing
@@ -396,18 +403,59 @@ public class VaultConnector {
     }
 
     /**
-     * Get all keys (field names) for a secret at the given path.
+     * Get the key path of every credential value in a secret at the given path. Each key path is the list of
+     * decoded segments that leads to a value, so a top-level field is a single segment and a field inside a nested
+     * JSON object has one segment per level. Objects themselves are not credentials and are not returned, only
+     * the values inside them, and an object with no values contributes nothing.
      *
      * @param path the vault path specifying the secret location
-     * @return set of key names in the secret
+     * @return the key path segments of every value in the secret
      * @throws CredentialStoreException if reading fails
      */
-    public List<String> getKeysForSecret(VaultPath path) throws CredentialStoreException {
-        Map<String, Object> secretData = getSecretData(path);
-        if (secretData == null) {
-            return new ArrayList<>();
+    public List<List<String>> getKeysForSecret(VaultPath path) throws CredentialStoreException {
+        List<List<String>> keyPaths = new ArrayList<>();
+        collectKeyPaths(getSecretData(path), new ArrayList<>(), keyPaths);
+        return keyPaths;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void collectKeyPaths(Map<String, Object> data, List<String> prefix, List<List<String>> keyPaths) {
+        if (data == null) {
+            return;
         }
-        return new ArrayList<>(secretData.keySet());
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            List<String> keyPath = new ArrayList<>(prefix);
+            keyPath.add(entry.getKey());
+            if (entry.getValue() instanceof Map) {
+                collectKeyPaths((Map<String, Object>) entry.getValue(), keyPath, keyPaths);
+            } else {
+                keyPaths.add(keyPath);
+            }
+        }
+    }
+
+    /**
+     * Convert the JSON data of a secret into maps that {@link VaultKeyPathOperations} can traverse.
+     * A nested JSON object becomes a nested {@code Map}. Every other value is kept as text, as the
+     * Vault client does: strings unquoted, numbers, booleans and arrays as their JSON text. JSON nulls
+     * are left out, as the Vault client does.
+     */
+    static Map<String, Object> toDataMap(JsonObject json) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (JsonObject.Member member : json) {
+            JsonValue value = member.getValue();
+            if (value == null || value.isNull()) {
+                continue;
+            }
+            if (value.isObject()) {
+                result.put(member.getName(), toDataMap(value.asObject()));
+            } else if (value.isString()) {
+                result.put(member.getName(), value.asString());
+            } else {
+                result.put(member.getName(), value.toString());
+            }
+        }
+        return result;
     }
 
     public Map<String, Object> getSecretData(VaultPath vaultPath) throws CredentialStoreException {
@@ -425,10 +473,13 @@ public class VaultConnector {
                 Map<String, String> data = response.getData();
                 if (data != null) {
                     ROOT_LOGGER.vaultRetrievedSecret(path, this.vaultUrl);
-                    // Convert Map<String, String> to Map<String, Object> for VaultKeyPathOperations
-                    Map<String, Object> result = new HashMap<>();
-                    result.putAll(data);
-                    return result;
+                    // response.getData() flattens nested JSON objects into JSON text, which key paths such as
+                    // "database/credentials/password" cannot traverse. Build real nested maps from the JSON instead.
+                    JsonObject dataObject = response.getDataObject();
+                    if (dataObject != null) {
+                        return toDataMap(dataObject);
+                    }
+                    return new HashMap<>(data);
                 }
                 return null;
             }
@@ -445,6 +496,58 @@ public class VaultConnector {
         } catch (VaultException e) {
             throw new CredentialStoreException("Failed to retrieve secret from Vault: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Read the secret at the path as a mutable map to be changed and written back. Nested JSON objects
+     * become nested maps that {@link VaultKeyPathOperations} can modify. Every other value stays the
+     * {@link JsonValue} Vault returned, so numbers, booleans, arrays and nulls are written back
+     * unchanged. {@code response.getData()} cannot be used here: it turns nested objects into text,
+     * which would then be written back as a string and destroy the structure.
+     */
+    private static Map<String, Object> readSecretDataForUpdate(Vault vault, String path) throws VaultException {
+        Map<String, Object> secretData = new HashMap<>();
+        LogicalResponse readResponse = vault.logical().read(path);
+        if (readResponse.getRestResponse().getStatus() == 200) {
+            JsonObject existing = readResponse.getDataObject();
+            if (existing != null) {
+                secretData.putAll(toMutableMap(existing));
+            }
+        }
+        return secretData;
+    }
+
+    private static Map<String, Object> toMutableMap(JsonObject json) {
+        Map<String, Object> result = new HashMap<>();
+        for (JsonObject.Member member : json) {
+            JsonValue value = member.getValue();
+            result.put(member.getName(), value.isObject() ? toMutableMap(value.asObject()) : value);
+        }
+        return result;
+    }
+
+    /** Top-level values for the Vault client, with nested maps turned back into JSON objects. */
+    private static Map<String, Object> toWritableData(Map<String, Object> data) {
+        Map<String, Object> result = new HashMap<>();
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            result.put(entry.getKey(), toJsonValue(entry.getValue()));
+        }
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static JsonValue toJsonValue(Object value) {
+        if (value instanceof JsonValue) {
+            return (JsonValue) value;
+        }
+        if (value instanceof Map) {
+            JsonObject object = Json.object();
+            for (Map.Entry<String, Object> entry : ((Map<String, Object>) value).entrySet()) {
+                object.add(entry.getKey(), toJsonValue(entry.getValue()));
+            }
+            return object;
+        }
+        return Json.value(String.valueOf(value));
     }
 
     /**
@@ -470,28 +573,14 @@ public class VaultConnector {
             Vault vault = getVaultForPath(alias);
 
             // Read existing secret data to preserve other keys
-            Map<String, Object> secretData = new HashMap<>();
-            LogicalResponse readResponse = vault.logical().read(path);
-            int readStatus = readResponse.getRestResponse().getStatus();
-            if (readStatus == 200) {
-                Map<String, String> existingData = readResponse.getData();
-                if (existingData != null) {
-                    secretData.putAll(existingData);
-                }
-            }
+            Map<String, Object> secretData = readSecretDataForUpdate(vault, path);
 
             // Update the value at the specified key path
             String keyPath = alias.getKeyPath();
-            if (keyPath.contains("/")) {
-                // Nested key path - need to traverse and update
-                VaultKeyPathOperations.setNestedValue(secretData, keyPath, value);
-            } else {
-                // Simple key - direct update
-                secretData.put(keyPath, value);
-            }
+            VaultKeyPathOperations.setNestedValueSegments(secretData, alias.getKeyPathSegments(), value);
 
             // Write back to Vault
-            LogicalResponse response = vault.logical().write(path, secretData);
+            LogicalResponse response = vault.logical().write(path, toWritableData(secretData));
             int responseStatus = response.getRestResponse().getStatus();
             if (responseStatus == 200 || responseStatus == 204) {
                 ROOT_LOGGER.vaultStoredSecret(path, this.vaultUrl);
@@ -526,26 +615,11 @@ public class VaultConnector {
             Vault vault = getVaultForPath(alias);
 
             // Read existing secret data
-            Map<String, Object> secretData = new HashMap<>();
-            LogicalResponse readResponse = vault.logical().read(path);
-            int readStatus = readResponse.getRestResponse().getStatus();
-            if (readStatus == 200) {
-                Map<String, String> existingData = readResponse.getData();
-                if (existingData != null) {
-                    secretData.putAll(existingData);
-                }
-            }
+            Map<String, Object> secretData = readSecretDataForUpdate(vault, path);
 
             // Remove the value at the specified key path
             String keyPath = alias.getKeyPath();
-            boolean removed;
-            if (keyPath.contains("/")) {
-                // Nested key path - need to traverse and remove
-                removed = VaultKeyPathOperations.removeNestedValue(secretData, keyPath);
-            } else {
-                // Simple key - direct removal
-                removed = secretData.remove(keyPath) != null;
-            }
+            boolean removed = VaultKeyPathOperations.removeNestedValueSegments(secretData, alias.getKeyPathSegments());
 
             if (!removed) {
                 ROOT_LOGGER.vaultKeyDoesNotExistAtPath(keyPath, path);
@@ -566,7 +640,7 @@ public class VaultConnector {
                 throw ROOT_LOGGER.vaultFailedToDeleteSecretHttp(path, deleteStatus);
             } else {
                 // Write back the remaining keys
-                LogicalResponse writeResponse = vault.logical().write(path, secretData);
+                LogicalResponse writeResponse = vault.logical().write(path, toWritableData(secretData));
                 int writeStatus = writeResponse.getRestResponse().getStatus();
                 if (writeStatus == 200 || writeStatus == 204) {
                     ROOT_LOGGER.vaultRemovedKeyFromPath(keyPath, path);

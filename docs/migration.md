@@ -489,6 +489,17 @@ If your paths contain special characters, plan for URL encoding:
 test path → test%20path
 test#path → test%23path
 test?path → test%3Fpath
+test%path → test%25path
+test+path → test%2Bpath
+```
+
+Key names follow the same rules, plus one more: an unencoded `/` in a key path is nested traversal, so a key whose
+name contains a slash must be written with `%2F`:
+
+```
+?database/host      → nested: data["database"]["host"]
+?database%2Fhost    → literal key "database/host"
+?database%252Fhost  → literal key "database%2Fhost"
 ```
 
 ## Timeline Recommendations
@@ -541,7 +552,7 @@ test?path → test%3Fpath
 
 **Solutions:**
 1. Verify the key path is correct
-2. Check if you need nested path (`/`) vs simple key
+2. Check if you need nested path (`/`) vs simple key, and whether a key name that contains a slash is written as `%2F`
 3. Inspect the actual Vault secret structure
 4. Test key path resolution separately
 
@@ -560,8 +571,8 @@ test?path → test%3Fpath
 **Symptoms:** Paths with special characters not working.
 
 **Solutions:**
-1. Verify special characters are URL-encoded (`#` → `%23`, `?` → `%3F`)
-2. Check that spaces are encoded as `%20`
+1. Verify special characters are URL-encoded (`#` → `%23`, `?` → `%3F`, `%` → `%25`, `+` → `%2B`)
+2. Check that spaces are encoded as `%20` (an unencoded `+` is read as a space)
 3. Test with simple paths first, then add encoding
 4. Review URL encoding documentation
 

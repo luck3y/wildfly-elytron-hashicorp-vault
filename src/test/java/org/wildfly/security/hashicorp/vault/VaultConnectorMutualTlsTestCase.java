@@ -31,7 +31,7 @@ public class VaultConnectorMutualTlsTestCase {
 
     @BeforeEach
     public void beforeEach() throws Exception {
-        vaultTestContainer = new VaultContainerHttps<>("hashicorp/vault:1.13", true)
+        vaultTestContainer = new VaultContainerHttps<>(VaultContainerVersion.IMAGE, true)
                 .withVaultToken("myroot")
                 .withInitCommand(
                         "secrets enable transit",

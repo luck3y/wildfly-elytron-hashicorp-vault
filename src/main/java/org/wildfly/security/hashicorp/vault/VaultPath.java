@@ -8,6 +8,10 @@ import static org.wildfly.security.hashicorp.vault._private.HashiCorpVaultLogger
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 import org.wildfly.security.credential.store.CredentialStoreException;
@@ -99,7 +103,6 @@ class VaultPath {
      * @return the parsed VaultPath or VaultAlias
      * @throws CredentialStoreException if the format is invalid
      */
-    @SuppressWarnings("unchecked")
     static <T extends VaultPath> T parse(String input, String defaultEngineType, String defaultMountPath,
                                           boolean supportLegacyFormat, boolean requireKey, Class<T> resultClass)
             throws CredentialStoreException {
@@ -126,7 +129,9 @@ class VaultPath {
         } else if (requireKey) {
             // No ? found - check for legacy dot-separated format
             if (!hasNewFormatIndicators) {
-                // No new format indicators - might be legacy format
+                // No new format indicators - might be legacy format. The key is the part after the last dot,
+                // wherever that is. This matches 1.1.0.CR3 exactly, including for aliases such as "my.app/config"
+                // (secret "my", key "app/config"), because existing configurations may depend on it.
                 int lastDot = input.lastIndexOf('.');
                 if (lastDot != -1) {
                     if (supportLegacyFormat) {
@@ -157,7 +162,8 @@ class VaultPath {
         // If we used legacy alias format (dot-separated), don't allow legacy path format (slash-separated)
         // to avoid double-parsing (e.g., "mount/secret.key" shouldn't be parsed as mount twice)
         boolean allowLegacyPathFormat = supportLegacyFormat && !legacyAliasFormatUsed;
-        return parsePathPart(path, keyPath, defaultEngineType, defaultMountPath, allowLegacyPathFormat, requireKey, resultClass);
+        return parsePathPart(path, keyPath, defaultEngineType, defaultMountPath, allowLegacyPathFormat, requireKey,
+                legacyAliasFormatUsed, resultClass);
     }
 
     /**
@@ -166,7 +172,7 @@ class VaultPath {
     @SuppressWarnings("unchecked")
     private static <T extends VaultPath> T parsePathPart(String path, String keyPath, String defaultEngineType,
                                                           String defaultMountPath, boolean supportLegacyFormat,
-                                                          boolean requireKey, Class<T> resultClass)
+                                                          boolean requireKey, boolean legacyKey, Class<T> resultClass)
             throws CredentialStoreException {
         if (path == null || path.isEmpty()) {
             throw ROOT_LOGGER.aliasCannotBeNullOrEmpty();
@@ -261,17 +267,26 @@ class VaultPath {
         }
 
         // Validate and decode key path if present
+        List<String> keyPathSegments = null;
         if (keyPath != null) {
             if (keyPath.isEmpty()) {
                 throw ROOT_LOGGER.keyPathCannotBeEmpty(path + "?" + keyPath);
             }
-            keyPath = urlDecode(keyPath);
-
-            // Validate key path doesn't contain empty segments
-            if (keyPath.contains("/")) {
-                if (keyPath.startsWith("/") || keyPath.endsWith("/") || keyPath.contains("//")) {
-                    throw ROOT_LOGGER.keyPathContainsEmptySegment(keyPath);
+            // New format: split on the raw (still encoded) key path so that an encoded %2F stays inside a
+            // segment as a literal slash while an unencoded / separates nested segments.
+            // Legacy format: decode first and then split, exactly as 1.1.0.CR3 did, so that a legacy key
+            // such as "k%2Fz" is still read as the nested path k/z and existing configurations keep working.
+            String[] rawSegments = (legacyKey ? urlDecode(keyPath) : keyPath).split("/", -1);
+            if (rawSegments.length > 1) {
+                for (String rawSegment : rawSegments) {
+                    if (rawSegment.isEmpty()) {
+                        throw ROOT_LOGGER.keyPathContainsEmptySegment(urlDecode(keyPath));
+                    }
                 }
+            }
+            keyPathSegments = new ArrayList<>(rawSegments.length);
+            for (String rawSegment : rawSegments) {
+                keyPathSegments.add(legacyKey ? rawSegment : urlDecode(rawSegment));
             }
         } else if (requireKey) {
             throw ROOT_LOGGER.keyPathCannotBeEmpty(path);
@@ -279,12 +294,12 @@ class VaultPath {
 
         ROOT_LOGGER.debugf("Parsed vault %s: engine=%s, mount=%s, secret=%s%s",
                           requireKey ? "alias" : "path", engineType, mountPath, secretPath,
-                          keyPath != null ? ", key=" + keyPath : "");
+                          keyPathSegments != null ? ", key=" + keyPathSegments : "");
 
         // Create appropriate instance based on whether key is present
-        if (keyPath != null) {
+        if (keyPathSegments != null) {
             // Return VaultAlias
-            return (T) new VaultAlias(engineType, mountPath, secretPath, keyPath);
+            return (T) new VaultAlias(engineType, mountPath, secretPath, keyPathSegments);
         } else {
             // Return VaultPath
             return (T) new VaultPath(engineType, mountPath, secretPath);
@@ -326,6 +341,69 @@ class VaultPath {
             }
         }
         return minPos;
+    }
+
+    /**
+     * URL-encode a single name (a key, or one path segment) so that {@link #urlDecode(String)} gives back
+     * exactly the same string. Spaces become {@code %20} (never {@code +}), and every character that is
+     * meaningful in an alias, such as {@code / ? # @ % +}, is percent-encoded.
+     *
+     * @param s the decoded name
+     * @return the encoded name
+     */
+    static String urlEncode(String s) {
+        return URLEncoder.encode(s, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    /**
+     * URL-encode a path, encoding each {@code /}-separated segment but keeping the {@code /} separators.
+     *
+     * @param path the decoded path
+     * @return the encoded path, which parses back to {@code path}
+     */
+    static String encodePath(String path) {
+        String[] segments = path.split("/", -1);
+        StringBuilder encoded = new StringBuilder();
+        for (int i = 0; i < segments.length; i++) {
+            if (i > 0) {
+                encoded.append('/');
+            }
+            encoded.append(urlEncode(segments[i]));
+        }
+        return encoded.toString();
+    }
+
+    /**
+     * Build the alias string for a key in a secret, in the form that {@link VaultAlias#parse(String)} reads back
+     * as the same secret path and the same key: {@code #secret-path?key}. Slashes in the secret path are
+     * separators, but a slash in the key is part of its name and so is encoded as {@code %2F}.
+     *
+     * @param secretPath the decoded secret path
+     * @param key the decoded key (field) name
+     * @return the alias
+     */
+    static String toAlias(String secretPath, String key) {
+        return toAlias(secretPath, List.of(key));
+    }
+
+    /**
+     * Build the alias string for a value in a secret, where the value may be inside nested JSON objects:
+     * {@code #secret-path?segment/segment}. Each key segment is encoded on its own, so a slash that is part of a
+     * segment's name is {@code %2F} and only the slashes between segments are traversal.
+     *
+     * @param secretPath the decoded secret path
+     * @param keySegments the decoded key path segments, outermost first
+     * @return the alias
+     */
+    static String toAlias(String secretPath, List<String> keySegments) {
+        StringBuilder alias = new StringBuilder("#").append(encodePath(secretPath)).append('?');
+        for (int i = 0; i < keySegments.size(); i++) {
+            if (i > 0) {
+                alias.append('/');
+            }
+            alias.append(urlEncode(keySegments.get(i)));
+        }
+        return alias.toString();
     }
 
     /**

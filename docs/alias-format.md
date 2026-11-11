@@ -48,7 +48,8 @@ Separates the mount path from the secret path. Required when using `engine=` or 
 Separates the secret path from the key path. Always required.
 
 ### `/` - JSON Path Traversal
-Within the key path, `/` indicates nested JSON traversal.
+Within the key path, an unencoded `/` indicates nested JSON traversal. A percent-encoded `%2F` is a literal slash
+that is part of a key name (see [Slash and Percent in Key Names](#4-slash-and-percent-in-key-names)).
 
 ## Key Path Syntax
 
@@ -74,6 +75,63 @@ Combine both approaches:
 ?my.app/config.key    → Traverse: data["my.app"]["config.key"]
 ?config/db.host       → Traverse: data["config"]["db.host"]
 ```
+
+### 4. Slash and Percent in Key Names
+
+The key path is split on `/` **before** each segment is URL-decoded. This is what lets an alias tell a nested
+path apart from a key whose name contains a slash or a percent sign. The same three spellings apply to any key:
+
+| Alias key path | Meaning | Looks up |
+|----------------|---------|----------|
+| `?database/host` | Nested traversal | `data["database"]["host"]` |
+| `?database%2Fhost` | Literal key named `database/host` | `data["database/host"]` |
+| `?database%252Fhost` | Literal key named `database%2Fhost` | `data["database%2Fhost"]` |
+
+`%2F` and `%2f` are equivalent. `%252F` is `%2F` with its `%` encoded as `%25`: the segment is decoded exactly
+once, so the result is the literal text `%2F`, which is **not** decoded a second time into a slash.
+
+Given Vault secret:
+
+```json
+{
+    "database/host": "literal-slash",
+    "database": { "host": "nested" },
+    "database%2Fhost": "literal-percent"
+}
+```
+
+```
+myapp?database/host        → "nested"
+myapp?database%2Fhost      → "literal-slash"
+myapp?database%252Fhost    → "literal-percent"
+```
+
+All three can exist in the same secret without conflict.
+
+`getAliases()` returns aliases in this same encoded form, so every alias it returns can be passed straight back to
+`retrieve()` and reads the value it was listed for. It lists every value, including values inside nested JSON
+objects, but not the objects themselves, because an object is not a credential. In the secret above it lists:
+
+```
+#myapp?database/host        → "nested"          (nested value, listed by its full key path)
+#myapp?database%2Fhost      → "literal-slash"   (literal key, slash encoded)
+#myapp?database%252Fhost    → "literal-percent"
+```
+
+and does not list `#myapp?database`, which points at an object. Names without special characters are listed
+unchanged.
+
+The same rule applies to the other characters that have a meaning in an alias. Encode them in a key name when
+they are part of the name:
+
+| Key name contains | Write in the alias | Why |
+|-------------------|--------------------|-----|
+| `/` | `%2F` | An unencoded `/` is nested traversal |
+| `%` | `%25` | `%` followed by two hex digits is an escape sequence; any other `%` leaves the whole segment undecoded |
+| `+` | `%2B` | An unencoded `+` is decoded as a space |
+| space | `%20` | |
+| `?` | `%3F` | `?` separates the secret path from the key path |
+| `#` | `%23` | |
 
 ## Examples
 
@@ -166,7 +224,7 @@ secret%3Fpath?key
 
 # URL-encoded characters work naturally:
 path%20with%20spaces?password
-path%2Fwith%2Fslash?key
+path%2Fwith%2Fslash?key                 # Same secret path as path/with/slash?key
 ```
 
 ## URL Encoding
@@ -180,7 +238,12 @@ You **MUST** URL-encode the following characters in mount paths and secret paths
 | `#` | `%23` | Always in paths |
 | `?` | `%3F` | Always in paths (rare) |
 | Space | `%20` | Always |
-| `/` | `%2F` | When `/` is part of path segment name (rare) |
+| `%` | `%25` | Always in paths: `%` followed by two hex digits is read as an escape sequence, and a `%` that is not leaves the whole segment undecoded (so `a%20b%zz` keeps its `%20`) |
+| `+` | `%2B` | Always in paths: an unencoded `+` is decoded as a space |
+
+In a mount path or secret path, `/` is always a separator. `%2F` is decoded to `/` and is therefore also a
+separator, so `path%2Fwith%2Fslash` is the same path as `path/with/slash`. Only the **key path** can hold a
+literal slash in a name (see [Slash and Percent in Key Names](#4-slash-and-percent-in-key-names)).
 
 ### URL Encoding Examples
 
@@ -207,20 +270,33 @@ User provides:  #test%20path?key
 Split on ?:     secret="test%20path", key="key"
 Decode each:    secret="test path", key="key"
 Pass to Vault:  "test path"
-Vault client:   Encodes to "test%20path" ✓ CORRECT
+Connector:      Re-encodes each path segment to "test%20path" for the request ✓ CORRECT
 ```
+
+The Vault client library does not encode path components itself, so the credential store encodes each segment of
+the mount and secret path when it builds the request URL, for reads, writes, removals and listing. A space is
+sent as `%20` (never `+`), and a name such as `100%dir` or `a+b` reaches Vault unchanged.
 
 ## Key Path Resolution Algorithm
 
-The key path resolution follows these rules:
+The key path is split on unencoded `/` first, and then each segment is URL-decoded once. `%2F` therefore stays
+inside one segment as a literal slash:
 
-1. **No `/` in key path** → Direct lookup (supports dots in key name)
+```
+keyPath = "database/host"     → segments ["database", "host"]
+keyPath = "database%2Fhost"   → segments ["database/host"]
+keyPath = "database%252Fhost" → segments ["database%2Fhost"]
+```
+
+The key path resolution then follows these rules:
+
+1. **No unencoded `/` in key path** → Direct lookup (supports dots in key name)
    ```
    keyPath = "db.host"
    → data.get("db.host")
    ```
 
-2. **Contains `/`** → Split on `/` and traverse
+2. **Contains an unencoded `/`** → Traverse the segments one level at a time
    ```
    keyPath = "database/host"
    → data.get("database").get("host")
@@ -263,6 +339,32 @@ Key path resolutions:
 ?my.app/config.key           → "value123"
 ```
 
+Slash handling, for a secret that has both a nested `database` object and keys named `database/host` and
+`database%2Fhost`:
+```
+?database/host               → nested: data["database"]["host"]
+?database%2Fhost             → literal: data["database/host"]
+?database%252Fhost           → literal: data["database%2Fhost"]
+```
+
+## Values, Objects and Writes
+
+Secrets in a KV engine are JSON documents, and an alias reads or writes one value inside the document.
+
+- **Reading:** a nested JSON object is traversed by the `/` segments of the key path. The value at the end of the
+  key path is returned as text: strings as they are, and numbers, booleans and arrays as their JSON text
+  (`5432`, `true`, `["a","b"]`).
+- **Aliases that end at an object:** a key path that ends at a JSON object (for example `?database` in the secret
+  above) is not a credential value, so it resolves to nothing. Use a key path that ends at a leaf
+  (`?database/host`). `getAliases()` never lists an object.
+- **JSON `null`:** a key whose value is `null` is treated as absent.
+- **Storing:** `store()` changes only the value at the key path. Every sibling key, at every level, is written back
+  unchanged, and nested objects stay objects. Numbers, booleans and arrays elsewhere in the secret keep their JSON
+  type. Missing intermediate objects are created. If an intermediate segment currently holds a plain value, it is
+  replaced by an object.
+- **Removing:** `remove()` deletes only the value at the key path and leaves its siblings and parent objects in
+  place. If the secret becomes empty, the whole secret is deleted.
+
 ## Validation Rules
 
 ### Required Validations
@@ -274,8 +376,8 @@ Key path resolutions:
 
 ### Key Path Validation
 
-1. **Simple keys:** Any characters except `/` and `?`
-2. **Nested paths:** Segments separated by `/`, each segment can contain dots
+1. **Simple keys:** Any characters except `/` and `?`. To use `/` or `?` in a key name, encode it (`%2F`, `%3F`)
+2. **Nested paths:** Segments separated by an unencoded `/`, each segment can contain dots
 3. **No empty segments:** `database//host` is invalid
 
 ## Migration from Legacy Format
@@ -293,7 +395,14 @@ secret-path.key
 The implementation automatically detects the format:
 
 - **New format** if alias contains: `?`, `#`, `@`, or starts with `engine=`
-- **Legacy format** if none of the above indicators are present AND the alias contains a dot (`.`)
+- **Legacy format** if none of the above indicators are present AND the alias contains a dot (`.`). The alias is split
+  on its **last** dot, wherever that is, as it always has been. In `my.app/config` the last dot is before the slash,
+  so the secret is `my` and the key path is `app/config`. Prefer the new format for such names, for example
+  `my.app/config?key`.
+
+A legacy alias is URL-decoded exactly as it was before: `+` becomes a space and `%xx` is decoded, and the legacy key
+is decoded **before** it is split on `/`. So in a legacy alias `%2F` in the key is nested traversal, unlike the new
+format where `%2F` in a key path is a literal slash. This is kept so that existing configurations behave as they did.
 
 **Important:** Legacy format support must be explicitly enabled via the `support-legacy-alias-format` configuration parameter. When disabled (default in stable releases), aliases without new format indicators will be rejected with an error message providing the correct new format.
 
@@ -344,6 +453,7 @@ key-char       = ALPHA / DIGIT / "-" / "_" / "." / ":" / <any char except "/" an
 - `#` is fragment identifier → safe delimiter
 - `@` is clear "at location" marker
 - `/` in key path means JSON traversal
+- `%2F` in key path means a literal slash in the key name; `%252F` means the literal text `%2F`
 - No `/` in key path means literal key lookup
 - No ambiguity with URL-encoded characters
 - Decode-after-split prevents double-encoding
@@ -371,7 +481,7 @@ key-char       = ALPHA / DIGIT / "-" / "_" / "." / ":" / <any char except "/" an
 - URL-encoded paths work naturally
 - Clear, readable format
 - Single-character delimiters (concise)
-- Minimal encoding requirements (only for rare `#` and `?`)
+- Minimal encoding requirements (only for rare `#`, `?`, `%`, `+` and, in key names, `/`)
 - Intuitive nested path syntax
 
 ## See Also

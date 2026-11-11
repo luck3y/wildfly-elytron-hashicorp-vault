@@ -34,7 +34,7 @@ public class VaultConnectorWithHttpClientTestCase {
 
     @BeforeEach
     public void beforeEach() throws Exception {
-        vaultTestContainer = new VaultContainerHttps<>("hashicorp/vault:1.13")
+        vaultTestContainer = new VaultContainerHttps<>(VaultContainerVersion.IMAGE)
                 .withVaultToken("myroot")
                 .withInitCommand(
                         "secrets enable transit",

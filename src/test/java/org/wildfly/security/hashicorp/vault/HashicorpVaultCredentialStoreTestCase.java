@@ -569,7 +569,7 @@ public class HashicorpVaultCredentialStoreTestCase {
      */
     @Test
     public void testGetAliasesRecursiveForbiddenToListSubpaths() throws Exception {
-        vaultTestContainer = new VaultContainer<>("hashicorp/vault:1.13")
+        vaultTestContainer = new VaultContainer<>(VaultContainerVersion.IMAGE)
                 .withVaultToken("myroot")
                 .withInitCommand(
                         "secrets enable transit",

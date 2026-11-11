@@ -128,6 +128,7 @@ The credential store supports a structured alias format for referencing secrets:
 myapp/database?password              # Simple key
 myapp/config?database/host           # Nested JSON path
 services?my.app/config.key           # Nested with dots in keys
+myapp/config?database%2Fhost         # Literal key named "database/host" (%2F is not a nested path)
 ```
 
 **Advanced examples:**

@@ -36,7 +36,7 @@ public class VaultConnectorHttpsTestCase {
     }
 
     private void startVaultTestContainer() throws IOException, VaultException {
-        vaultTestContainer = new VaultContainerHttps<>("hashicorp/vault:1.13")
+        vaultTestContainer = new VaultContainerHttps<>(VaultContainerVersion.IMAGE)
                 .withVaultToken("myroot")
                 .withInitCommand(
                         "secrets enable transit",
@@ -136,7 +136,7 @@ public class VaultConnectorHttpsTestCase {
     @Test
     public void testIncorrectVaultToken() throws Exception {
         // setup test container with vault
-        vaultTestContainer = new VaultContainerHttps<>("hashicorp/vault:1.13")
+        vaultTestContainer = new VaultContainerHttps<>(VaultContainerVersion.IMAGE)
                 .withVaultToken("myroot")
                 .withInitCommand(
                         "secrets enable transit",

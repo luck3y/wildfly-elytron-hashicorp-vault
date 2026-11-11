@@ -24,7 +24,7 @@ import org.wildfly.security.hashicorp.vault.logging.JbossLoggingLogConsumer;
  *
  * <p><strong>Usage Example:</strong>
  * <pre>{@code
- * VaultContainerKvV1 container = new VaultContainerKvV1("hashicorp/vault:1.13");
+ * VaultContainerKvV1 container = new VaultContainerKvV1(VaultContainerVersion.IMAGE);
  * container.start();
  * // Use container.getHttpHostAddress() to connect
  * // Use container.getToken() to authenticate
@@ -38,7 +38,7 @@ public class VaultContainerKvV1<SELF extends VaultContainerKvV1<SELF>> extends V
     /**
      * Creates a Vault container with KV v1 engine enabled at the default "secret/" mount.
      *
-     * @param dockerImageName the Docker image name (e.g., "hashicorp/vault:1.13")
+     * @param dockerImageName the Docker image name (e.g., {@link VaultContainerVersion#IMAGE})
      */
     public VaultContainerKvV1(String dockerImageName) {
         this(dockerImageName, DEFAULT_TOKEN);
@@ -47,7 +47,7 @@ public class VaultContainerKvV1<SELF extends VaultContainerKvV1<SELF>> extends V
     /**
      * Creates a Vault container with KV v1 engine enabled at the default "secret/" mount.
      *
-     * @param dockerImageName the Docker image name (e.g., "hashicorp/vault:1.13")
+     * @param dockerImageName the Docker image name (e.g., {@link VaultContainerVersion#IMAGE})
      * @param token the root token to use for authentication
      */
     public VaultContainerKvV1(String dockerImageName, String token) {

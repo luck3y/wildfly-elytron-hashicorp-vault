@@ -65,10 +65,10 @@ public class VaultCliInteroperabilityTestCase {
     static Stream<Arguments> kvVersionConfigurations() {
         return Stream.of(
             // KV v1 only
-            Arguments.of(new VaultContainerKvV1<>("hashicorp/vault:1.13"), "secret", KvVersion.V1),
+            Arguments.of(new VaultContainerKvV1<>(VaultContainerVersion.IMAGE), "secret", KvVersion.V1),
 
             // KV v2 only
-            Arguments.of(new VaultContainer<>("hashicorp/vault:1.13")
+            Arguments.of(new VaultContainer<>(VaultContainerVersion.IMAGE)
                 .withVaultToken("myroot")
                 .withInitCommand(
                     "secrets enable transit",
@@ -76,10 +76,10 @@ public class VaultCliInteroperabilityTestCase {
                 ), "secret", KvVersion.V2),
 
             // Mixed: KV v1 at secret-v1/
-            Arguments.of(new VaultContainerKvMixed<>("hashicorp/vault:1.13"), "secret-v1", KvVersion.V1),
+            Arguments.of(new VaultContainerKvMixed<>(VaultContainerVersion.IMAGE), "secret-v1", KvVersion.V1),
 
             // Mixed: KV v2 at secret/
-            Arguments.of(new VaultContainerKvMixed<>("hashicorp/vault:1.13"), "secret", KvVersion.V2)
+            Arguments.of(new VaultContainerKvMixed<>(VaultContainerVersion.IMAGE), "secret", KvVersion.V2)
         );
     }
 

@@ -30,7 +30,7 @@ import org.wildfly.security.hashicorp.vault.logging.JbossLoggingLogConsumer;
  *
  * <p><strong>Usage Example:</strong>
  * <pre>{@code
- * VaultContainerKvMixed container = new VaultContainerKvMixed("hashicorp/vault:1.13");
+ * VaultContainerKvMixed container = new VaultContainerKvMixed(VaultContainerVersion.IMAGE);
  * container.start();
  *
  * // Access KV v1 secrets
@@ -49,7 +49,7 @@ public class VaultContainerKvMixed<SELF extends VaultContainerKvMixed<SELF>> ext
     /**
      * Creates a Vault container with both KV v1 and v2 engines enabled at different mount points.
      *
-     * @param dockerImageName the Docker image name (e.g., "hashicorp/vault:1.13")
+     * @param dockerImageName the Docker image name (e.g., {@link VaultContainerVersion#IMAGE})
      */
     public VaultContainerKvMixed(String dockerImageName) {
         this(dockerImageName, DEFAULT_TOKEN);
@@ -58,7 +58,7 @@ public class VaultContainerKvMixed<SELF extends VaultContainerKvMixed<SELF>> ext
     /**
      * Creates a Vault container with both KV v1 and v2 engines enabled at different mount points.
      *
-     * @param dockerImageName the Docker image name (e.g., "hashicorp/vault:1.13")
+     * @param dockerImageName the Docker image name (e.g., {@link VaultContainerVersion#IMAGE})
      * @param token the root token to use for authentication
      */
     public VaultContainerKvMixed(String dockerImageName, String token) {

@@ -31,7 +31,7 @@ import org.wildfly.security.password.interfaces.ClearPassword;
  */
 public class HashicorpVaultCredentialStoreTlsPropertiesTestCase {
 
-    private static final String VAULT_IMAGE = "hashicorp/vault:2.2.1";
+    private static final String VAULT_IMAGE = VaultContainerVersion.IMAGE;
     private static final String TOKEN = "myroot";
     private static final String SEEDED_ALIAS = "#tls-properties?password";
     private static final String CRUD_ALIAS = "#tls-created?password";

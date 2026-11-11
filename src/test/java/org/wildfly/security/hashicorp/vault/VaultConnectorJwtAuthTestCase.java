@@ -55,7 +55,7 @@ public class VaultConnectorJwtAuthTestCase {
 
     @BeforeEach
     public void beforeEach() throws IOException, VaultException, JoseException {
-        vaultTestContainer = new VaultContainerHttps<>("hashicorp/vault:1.13")
+        vaultTestContainer = new VaultContainerHttps<>(VaultContainerVersion.IMAGE)
                 .withVaultToken("myroot")
                 .withInitCommand(
                         "secrets enable transit",

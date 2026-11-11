@@ -101,7 +101,7 @@ public class AliasFormatIntegrationTestCase {
      * Creates a KV v1 container with all test data pre-populated.
      */
     private VaultContainer<?> createKvV1Container() {
-        return new VaultContainer<>("hashicorp/vault:1.13")
+        return new VaultContainer<>(VaultContainerVersion.IMAGE)
             .withVaultToken(DEFAULT_TOKEN)
             .withInitCommand(
                 // Disable default KV v2 and enable KV v1
@@ -141,7 +141,7 @@ public class AliasFormatIntegrationTestCase {
      * Creates a KV v2 container with all test data pre-populated.
      */
     private VaultContainer<?> createKvV2Container() {
-        return new VaultContainer<>("hashicorp/vault:1.13")
+        return new VaultContainer<>(VaultContainerVersion.IMAGE)
             .withVaultToken(DEFAULT_TOKEN)
             .withInitCommand(
                 // KV v2 is enabled by default at secret/
@@ -179,7 +179,7 @@ public class AliasFormatIntegrationTestCase {
      * Creates a mixed KV container with both v1 and v2 engines at different mounts.
      */
     private VaultContainer<?> createKvMixedContainer() {
-        return new VaultContainer<>("hashicorp/vault:1.13")
+        return new VaultContainer<>(VaultContainerVersion.IMAGE)
             .withVaultToken(DEFAULT_TOKEN)
             .withInitCommand(
                 // Enable KV v1 at secret-v1/

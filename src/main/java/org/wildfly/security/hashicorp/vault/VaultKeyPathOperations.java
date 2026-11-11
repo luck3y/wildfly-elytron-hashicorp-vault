@@ -7,6 +7,8 @@ package org.wildfly.security.hashicorp.vault;
 import static org.wildfly.common.Assert.checkNotNullParam;
 import static org.wildfly.security.hashicorp.vault._private.HashiCorpVaultLogger.ROOT_LOGGER;
 
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import org.wildfly.security.credential.store.CredentialStoreException;
 
@@ -67,11 +69,29 @@ import org.wildfly.security.credential.store.CredentialStoreException;
 class VaultKeyPathOperations {
 
     /**
+     * Split a key path on {@code /} into segments. A key path without {@code /} yields a single segment.
+     * Trailing empty segments are dropped (as with {@link String#split(String)}).
+     */
+    private static List<String> splitKeyPath(String keyPath) throws CredentialStoreException {
+        if (keyPath == null || keyPath.isEmpty()) {
+            throw ROOT_LOGGER.keyPathCannotBeNullOrEmpty();
+        }
+        return Arrays.asList(keyPath.split("/"));
+    }
+
+    private static void checkSegmentsNotEmpty(List<String> segments) throws CredentialStoreException {
+        if (segments == null || segments.isEmpty()) {
+            throw ROOT_LOGGER.keyPathCannotBeNullOrEmpty();
+        }
+    }
+
+    /**
      * Extract value from Vault secret data using key path.
      *
-     * <p>If the key path contains no {@code /} separator, performs a simple lookup
-     * in the data map (supporting dots in key names). If the key path contains
-     * {@code /} separators, traverses nested maps using each segment as a key.
+     * <p>The key path is split on {@code /} and each segment is used as a key while
+     * traversing nested maps. A key path without {@code /} is a simple lookup
+     * (supporting dots in key names). This method treats every {@code /} as a separator;
+     * use {@link #resolveKeyPathSegments(Map, List)} when a segment may itself contain a slash.
      *
      * @param data the secret data map from Vault
      * @param keyPath the key path from alias (after ? delimiter, already URL-decoded)
@@ -79,9 +99,21 @@ class VaultKeyPathOperations {
      * @throws CredentialStoreException if keyPath is null or empty
      */
     public static String resolveKeyPath(Map<String, Object> data, String keyPath) throws CredentialStoreException {
-        if (keyPath == null || keyPath.isEmpty()) {
-            throw ROOT_LOGGER.keyPathCannotBeNullOrEmpty();
-        }
+        return resolveKeyPathSegments(data, splitKeyPath(keyPath));
+    }
+
+    /**
+     * Extract value from Vault secret data using already-decoded key path segments.
+     * Each segment is used verbatim as a map key, so a segment may contain a literal {@code /}.
+     *
+     * @param data the secret data map from Vault
+     * @param segments the decoded key path segments
+     * @return the extracted value as a string, or {@code null} if not found
+     * @throws CredentialStoreException if segments is null or empty, or a segment is empty
+     */
+    public static String resolveKeyPathSegments(Map<String, Object> data, List<String> segments) throws CredentialStoreException {
+        checkSegmentsNotEmpty(segments);
+        String keyPath = String.join("/", segments);
 
         if (data == null) {
             ROOT_LOGGER.debugf("Key path '%s' not found - secret data is null", keyPath);
@@ -90,38 +122,21 @@ class VaultKeyPathOperations {
 
         ROOT_LOGGER.debugf("Resolving key path: %s", keyPath);
 
-        // Check if key path contains / (nested path)
-        if (!keyPath.contains("/")) {
-            // Simple key - direct lookup (supports dots in key name)
-            Object value = data.get(keyPath);
-            if (value == null) {
-                ROOT_LOGGER.debugf("Key path '%s' not found in secret data", keyPath);
-                return null;
-            }
-            if (value instanceof Map) {
-                // Key path is incomplete - points to a nested structure, not a leaf value
-                ROOT_LOGGER.debugf("Key path '%s' points to a nested structure, not a credential value", keyPath);
-                return null;
-            }
-            ROOT_LOGGER.debugf("Key path '%s' resolved successfully", keyPath);
-            return value.toString();
-        }
+        int nestingLevel = segments.size();
 
-        // Nested path - traverse using /
-        String[] segments = keyPath.split("/");
-        int nestingLevel = segments.length;
-
-        // Warn about deep nesting (>5 levels)
+        // Warn about deep nesting (>5 levels), but only if debug is enabled
         if (nestingLevel > 5) {
-            ROOT_LOGGER.deepKeyPathNesting(keyPath, nestingLevel);
+            if (ROOT_LOGGER.isDebugEnabled()) {
+                ROOT_LOGGER.deepKeyPathNesting(keyPath, nestingLevel);
+            }
         }
 
         ROOT_LOGGER.debugf("Traversing nested key path with %d segments", nestingLevel);
 
         Object current = data;
 
-        for (int i = 0; i < segments.length; i++) {
-            String segment = segments[i];
+        for (int i = 0; i < segments.size(); i++) {
+            String segment = segments.get(i);
 
             // Validate segment is not empty
             if (segment.isEmpty()) {
@@ -146,7 +161,7 @@ class VaultKeyPathOperations {
             }
 
             // If this is the last segment, return the value
-            if (i == segments.length - 1) {
+            if (i == segments.size() - 1) {
                 if (current instanceof Map) {
                     // Key path is incomplete - points to a nested structure, not a leaf value
                     ROOT_LOGGER.debugf("Key path '%s' points to a nested structure, not a credential value", keyPath);
@@ -169,34 +184,37 @@ class VaultKeyPathOperations {
      * @param value the value to set
      * @throws CredentialStoreException if keyPath is null or empty
      */
-    @SuppressWarnings("unchecked")
     public static void setNestedValue(Map<String, Object> data, String keyPath, String value) throws CredentialStoreException {
-        if (keyPath == null || keyPath.isEmpty()) {
-            throw ROOT_LOGGER.keyPathCannotBeNullOrEmpty();
-        }
+        setNestedValueSegments(data, splitKeyPath(keyPath), value);
+    }
+
+    /**
+     * Set a value in Vault secret data using already-decoded key path segments.
+     * Each segment is used verbatim as a map key, so a segment may contain a literal {@code /}.
+     *
+     * @param data the secret data map to modify
+     * @param segments the decoded key path segments
+     * @param value the value to set
+     * @throws CredentialStoreException if segments is null or empty, or a segment is empty
+     */
+    @SuppressWarnings("unchecked")
+    public static void setNestedValueSegments(Map<String, Object> data, List<String> segments, String value) throws CredentialStoreException {
+        checkSegmentsNotEmpty(segments);
         checkNotNullParam("data", data);
 
-        // Check if key path contains / (nested path)
-        if (!keyPath.contains("/")) {
-            // Simple key - direct set
-            data.put(keyPath, value);
-            return;
-        }
-
-        // Nested path - traverse and create maps as needed
-        String[] segments = keyPath.split("/");
+        String keyPath = String.join("/", segments);
         Map<String, Object> current = data;
 
-        for (int i = 0; i < segments.length; i++) {
-            String segment = segments[i];
+        for (int i = 0; i < segments.size(); i++) {
+            String segment = segments.get(i);
 
             // Validate segment is not empty
-            if (segment.isEmpty()) {
+            if (segment == null || segment.isEmpty()) {
                 throw ROOT_LOGGER.keyPathContainsEmptySegment(keyPath);
             }
 
             // If this is the last segment, set the value
-            if (i == segments.length - 1) {
+            if (i == segments.size() - 1) {
                 current.put(segment, value);
                 return;
             }
@@ -229,35 +247,39 @@ class VaultKeyPathOperations {
      * @return true if a value was removed, false if the key path didn't exist
      * @throws CredentialStoreException if keyPath is null or empty
      */
-    @SuppressWarnings("unchecked")
     public static boolean removeNestedValue(Map<String, Object> data, String keyPath) throws CredentialStoreException {
-        if (keyPath == null || keyPath.isEmpty()) {
-            throw ROOT_LOGGER.keyPathCannotBeNullOrEmpty();
-        }
+        return removeNestedValueSegments(data, splitKeyPath(keyPath));
+    }
+
+    /**
+     * Remove a value from Vault secret data using already-decoded key path segments.
+     * Each segment is used verbatim as a map key, so a segment may contain a literal {@code /}.
+     *
+     * @param data the secret data map to modify
+     * @param segments the decoded key path segments
+     * @return true if a value was removed, false if the key path didn't exist
+     * @throws CredentialStoreException if segments is null or empty, or a segment is empty
+     */
+    @SuppressWarnings("unchecked")
+    public static boolean removeNestedValueSegments(Map<String, Object> data, List<String> segments) throws CredentialStoreException {
+        checkSegmentsNotEmpty(segments);
         if (data == null) {
             return false;
         }
 
-        // Check if key path contains / (nested path)
-        if (!keyPath.contains("/")) {
-            // Simple key - direct removal
-            return data.remove(keyPath) != null;
-        }
-
-        // Nested path - traverse to parent and remove leaf
-        String[] segments = keyPath.split("/");
+        String keyPath = String.join("/", segments);
         Map<String, Object> current = data;
 
-        for (int i = 0; i < segments.length; i++) {
-            String segment = segments[i];
+        for (int i = 0; i < segments.size(); i++) {
+            String segment = segments.get(i);
 
             // Validate segment is not empty
-            if (segment.isEmpty()) {
+            if (segment == null || segment.isEmpty()) {
                 throw ROOT_LOGGER.keyPathContainsEmptySegment(keyPath);
             }
 
             // If this is the last segment, remove it
-            if (i == segments.length - 1) {
+            if (i == segments.size() - 1) {
                 return current.remove(segment) != null;
             }
 

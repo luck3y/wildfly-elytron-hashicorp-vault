@@ -62,7 +62,7 @@ public class BackwardsCompatibilityTestCase {
     @BeforeAll
     void setupContainer() {
         // Create KV v2 container with test data
-        kvV2Container = new VaultContainerKvV1("hashicorp/vault:1.13", DEFAULT_TOKEN)
+        kvV2Container = new VaultContainerKvV1(VaultContainerVersion.IMAGE, DEFAULT_TOKEN)
             .withInitCommand(
                 // Disable default KV v2 at secret/
                 "secrets disable secret",

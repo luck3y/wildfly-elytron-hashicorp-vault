@@ -233,7 +233,7 @@ public class VaultKeyPathOperationsTestCase {
     @Test
     void testNullValueInNestedPath() throws CredentialStoreException {
         // Add null value in nested structure
-        Map<String, Object> database = (Map<String, Object>) testData.get("database");
+        Map<String, Object> database = child(testData, "database");
         database.put("nullField", null);
 
         String result = VaultKeyPathOperations.resolveKeyPath(testData, "database/nullField");
@@ -259,7 +259,7 @@ public class VaultKeyPathOperationsTestCase {
 
         assertTrue(data.containsKey("database"));
         assertTrue(data.get("database") instanceof Map);
-        Map<String, Object> database = (Map<String, Object>) data.get("database");
+        Map<String, Object> database = child(data, "database");
         assertEquals("localhost", database.get("host"));
     }
 
@@ -268,8 +268,8 @@ public class VaultKeyPathOperationsTestCase {
         Map<String, Object> data = new HashMap<>();
         VaultKeyPathOperations.setNestedValue(data, "database/credentials/password", "secret");
 
-        Map<String, Object> database = (Map<String, Object>) data.get("database");
-        Map<String, Object> credentials = (Map<String, Object>) database.get("credentials");
+        Map<String, Object> database = child(data, "database");
+        Map<String, Object> credentials = child(database, "credentials");
         assertEquals("secret", credentials.get("password"));
     }
 
@@ -279,7 +279,7 @@ public class VaultKeyPathOperationsTestCase {
         VaultKeyPathOperations.setNestedValue(data, "my.app/config.key", "value");
 
         assertTrue(data.containsKey("my.app"));
-        Map<String, Object> myApp = (Map<String, Object>) data.get("my.app");
+        Map<String, Object> myApp = child(data, "my.app");
         assertEquals("value", myApp.get("config.key"));
     }
 
@@ -291,7 +291,7 @@ public class VaultKeyPathOperationsTestCase {
         VaultKeyPathOperations.setNestedValue(data, "database/host", "localhost");
 
         assertTrue(data.get("database") instanceof Map);
-        Map<String, Object> database = (Map<String, Object>) data.get("database");
+        Map<String, Object> database = child(data, "database");
         assertEquals("localhost", database.get("host"));
     }
 
@@ -360,8 +360,8 @@ public class VaultKeyPathOperationsTestCase {
         boolean removed = VaultKeyPathOperations.removeNestedValue(testData, "database/credentials/pass");
         assertTrue(removed);
 
-        Map<String, Object> database = (Map<String, Object>) testData.get("database");
-        Map<String, Object> credentials = (Map<String, Object>) database.get("credentials");
+        Map<String, Object> database = child(testData, "database");
+        Map<String, Object> credentials = child(database, "credentials");
         assertFalse(credentials.containsKey("pass"));
         assertTrue(credentials.containsKey("user")); // Other keys preserved
     }
@@ -476,5 +476,13 @@ public class VaultKeyPathOperationsTestCase {
         testData.put("price", 19.99);
         String result = VaultKeyPathOperations.resolveKeyPath(testData, "price");
         assertEquals("19.99", result);
+    }
+
+    /** The nested map stored under the key; fails the test if there is none. */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> child(Map<String, Object> parent, String key) {
+        Object value = parent.get(key);
+        assertTrue(value instanceof Map, key + " must be a nested map, was: " + value);
+        return (Map<String, Object>) value;
     }
 }

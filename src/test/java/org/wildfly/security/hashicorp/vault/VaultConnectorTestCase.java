@@ -76,7 +76,7 @@ public class VaultConnectorTestCase {
     }
 
     private void startVaultTestContainer() {
-        vaultTestContainer = new VaultContainer<>("hashicorp/vault:1.13")
+        vaultTestContainer = new VaultContainer<>(VaultContainerVersion.IMAGE)
                 .withVaultToken("myroot")
                 .withInitCommand(
                         "secrets enable transit",
@@ -136,7 +136,7 @@ public class VaultConnectorTestCase {
     @Test
     public void testIncorrectVaultToken() throws Exception {
         // setup test container with vault
-        vaultTestContainer = new VaultContainer<>("hashicorp/vault:1.13")
+        vaultTestContainer = new VaultContainer<>(VaultContainerVersion.IMAGE)
                 .withVaultToken("myroot")
                 .withInitCommand(
                         "secrets enable transit",
@@ -174,7 +174,7 @@ public class VaultConnectorTestCase {
      * No write, delete, or list capabilities are granted.
      */
     private void startVaultWithRestrictedPolicy() throws Exception {
-        vaultTestContainer = new VaultContainer<>("hashicorp/vault:1.13")
+        vaultTestContainer = new VaultContainer<>(VaultContainerVersion.IMAGE)
                 .withVaultToken("myroot")
                 .withInitCommand(
                         "secrets enable transit",
